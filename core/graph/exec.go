@@ -148,6 +148,38 @@ func (e *Exec) SetMaxCache(maxCacheSize int) *Exec {
 	return e
 }
 
+// WithMemoryBudget declares a hard device memory budget in bytes for every graph
+// this executor builds. Graphs whose planned peak exceeds the budget fail at
+// build time (returned from Compile/Call), never at execution.
+//
+// When autoRematerialize is true, the framework inserts checkpoint boundaries
+// itself until the peak fits the budget; if the target is unreachable it returns
+// an explicit error naming the irreducible peak and the largest tensor outputs.
+//
+// A budget of 0 disables enforcement and leaves the default compile/execute path
+// unchanged.
+func (e *Exec) WithMemoryBudget(budgetBytes int64, autoRematerialize bool) *Exec {
+	e.impl.SetMemoryBudget(budgetBytes, autoRematerialize)
+	return e
+}
+
+// MemoryBudget returns the configured budget (0 means disabled) and whether
+// automatic rematerialization is enabled.
+func (e *Exec) MemoryBudget() (budgetBytes int64, autoRematerialize bool) {
+	return e.impl.MemoryBudget()
+}
+
+// CachedGraphs returns the graphs currently held in the compilation cache.
+// The returned slice is a snapshot and must not be mutated.
+func (e *Exec) CachedGraphs() []*Graph {
+	internal := e.impl.CachedGraphs()
+	out := make([]*Graph, 0, len(internal))
+	for _, ig := range internal {
+		out = append(out, wrapGraph(ig))
+	}
+	return out
+}
+
 // SetSideParamsHook configures a function to be called just before executing a graph to set side parameters.
 func (e *Exec) SetSideParamsHook(fn SideParamsFn) *Exec {
 	if fn == nil {

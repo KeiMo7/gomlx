@@ -102,6 +102,39 @@ This table maps common functions from the `core/graph` package to their PyTorch 
 | `DynamicPad(x, fillVal, padSpecs...)` | Dynamic padding with runtime padding amounts. | `torch.nn.functional.pad(x, ...)` |
 | `NonZero(x, config...)` | Returns coordinates of non-zero elements (requires dynamic-shape backend; use boolean masking on static-shape backends). | `torch.nonzero(x)` |
 
+## Build-time memory planning (`core/graph/memory`)
+
+`memory.PlanMemory(g, memory.Options{BudgetBytes: 0, Outputs: ...})` returns an immutable
+`*memory.Plan` snapshot computed once from a graph (while building, or on a compiled graph before
+`Finalize`). All figures share one accounting basis:
+
+- **Liveness intervals**: each node output is one tensor record (multi-output ops are counted per
+  output); parameters, constants and graph outputs are live across the whole graph, intermediates
+  from production to last consumption.
+- **Bytes**: exact `dtypes` width with packed sub-byte types rounded up to whole bytes; runtime
+  (dynamic) dimensions are listed separately with a `KnownLowerBoundBytes`, never counted as zero
+  and never mixed into the exact peak.
+- **Alias groups** (`Bitcast` same-width reinterpretations, external-buffer constants,
+  backend-shared/cross-graph constants, repeated call arguments) count once and never share a slot.
+- **Reuse slots**: only non-overlapping intervals with equal bytes and alignment share a slot; the
+  plan reports both `PeakBeforeReuse` (one dedicated buffer per tensor) and `PeakBytes` (reuse-aware),
+  plus the reuse list and scope ranking.
+- `Plan.Report()`/`WriteReport(w)` render only shapes, scope paths and byte counts — never values,
+  weight paths or addresses.
+
+Budget enforcement and automatic rematerialization:
+
+```go
+exec.WithMemoryBudget(budgetBytes, autoRematerialize /* bool */) // 0 disables; default path unchanged
+plan, err := memory.PlanMemory(g, memory.Options{BudgetBytes: 4 << 30, Outputs: outputs})
+plan, boundaryIds, err := memory.AutoRematerialize(g, budgetBytes, outputs...) // before Gradient()
+```
+
+Over-budget graphs fail at build time with `*memory.BudgetExceededError` (overshoot, largest scope,
+irreducible peak); infeasible auto-remat returns `*memory.RematerializationError`.
+`memory.AggregatePlans(plans...)` / `memory.PlanExecGraphs(exec)` give the multi-shape executor view
+with cross-graph shared constants de-duplicated. A `Plan` is read-only and safe for concurrent reads.
+
 ## Standalone graph compilation
 
 `graph.Exec.CompileStandalone(inputShapes...)` builds a fresh graph using the executor's configuration.

@@ -2,6 +2,15 @@
 
 It hasn't reached yet a 1.0 release yet (it is close), so instead we use every minor revision (the X in v0.X.Y) to indicate a change in API, and patch numbers for minor bug fixes, updates or new examples.
 
+- 2026-11-25:
+  - `core/graph/memory`, `internal/graphimpl/memory`:
+    - Added build-time tensor memory planning: a single immutable snapshot computes per-output liveness intervals (graph outputs, parameters and constants are live across the whole graph; intermediates from production to last consumption), exact bytes with packed sub-byte rounding (and a separate known lower bound for runtime-dimension tensors, never treated as zero), alias groups (same-width `Bitcast`, external-buffer constants, backend-shared constants including cross-graph sharing, and repeated call arguments) counted once and never co-slotted, and conservative reuse-slot allocation requiring non-overlapping intervals plus equal bytes and alignment.
+    - Added `memory.PlanMemory` (returns `*Plan` with `TotalBytes`, `PeakBytes`, `PeakBeforeReuse`, `ReusedBytes`, `LowerBoundPeakBytes`, `NumDynamic`, `NumCheckpointBoundaries`, scope ranking, alias detail and a text `Report()`), `memory.AggregatePlans`/`PlanExecGraphs` for the per-shape multi-graph view with shared-constant de-duplication, typed `BudgetExceededError`/`AliasConflictError`/`RematerializationError`, and `memory.AutoRematerialize` which inserts framework-chosen checkpoint boundaries (reusing the existing `Node.Checkpoint` mechanism) until the peak fits a budget or fails explicitly with the irreducible peak and largest tensors.
+    - Errors and reports only mention shapes, scope paths and byte counts — never tensor values, weight paths or external addresses. Planning is read-only over one snapshot, starts no background tasks, adds no dependencies, and is safe for concurrent reads.
+  - `core/graph`, `internal/graphimpl`:
+    - Added `Exec.WithMemoryBudget(budgetBytes, autoRematerialize)`/`Exec.MemoryBudget()` and `Exec.CachedGraphs()`. With no budget configured the compile/execute/cache path is unchanged; with a budget, over-budget graphs fail at build time rather than at execution.
+    - Recorded function output nodes (`FunctionImpl.OutputNodes`), constant storage provenance (`NodeInputsConstant.Provenance`/`ExternalIdentity`), and added read-only graph accessors (`GraphImpl.Functions`, `OutputNodes`, `SetOutputNodes`, `FunctionImpl.Parameters`) and node input rewiring (`NodeImpl.RewireInput`, `MarkNeedsRematerialization`) used by the planner; the existing node printing and tensor-byte display are untouched.
+
 - 2026-11-18:
   - `core/graph`, `core/autodiff`, `internal/graphimpl`, `internal/graphbridge`:
     - Reworked `core/graph` to hide low-level engine internals (`Internal*`, `Backend*` ops, `NodeInputs*`, `ParamsMap`, `RunWithMap`, `NodeXlaHandle`, `CloneWithInputs`, `AttachState`/`State`, `Executable`, `MinConstValueSizeToKeep`) from the public `core/graph` API while adding `Graph.GetParam(name string) *Node`.

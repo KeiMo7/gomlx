@@ -20,6 +20,10 @@ The XLA backend only support static shapes (known in "graph building time"). Cur
     computation graphs, plus high-level tensor operations (`ops*.go`) and auto-generated public backend op wrappers
     (`gen_public_ops.go`). Internal engine types, raw backend ops (`Backend<Op>`), and `NodeInputs*` live in
     `internal/graphimpl`, with internal GoMLX cross-package conversions in `internal/graphbridge`.
+  - `core/graph/memory`: build-time tensor memory planning (`PlanMemory`, immutable `Plan` with liveness intervals,
+    byte accounting, alias groups, conservative reuse slots, budget enforcement, `AutoRematerialize`, and
+    multi-graph shared-constant de-duplication). Thin wrapper over `internal/graphimpl/memory`, registered into the
+    executor through hooks in `internal/graphimpl/memory_hooks.go` so no import cycle is introduced.
   - `core/autodiff`: reverse-mode automatic differentiation (`Gradient`, `VJPRegistration`, `SingleOutputVJP`,
     all operation VJPs, and checkpoint rematerialization). (`graph.Gradient` is kept temporarily as a deprecated
     stop-gap delegating via `graphimpl.GradientHook`.)

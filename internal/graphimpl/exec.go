@@ -60,6 +60,14 @@ type ExecImpl struct {
 	maxCacheSize int
 	dynamicAxes  [][]string
 
+	// memoryBudgetBytes > 0 enables build-time memory budget enforcement.
+	// Zero (the default) leaves the whole compile/execute path unchanged.
+	memoryBudgetBytes int64
+
+	// memoryAutoRematerialize lets the framework insert checkpoint boundaries
+	// itself when the planned peak exceeds memoryBudgetBytes.
+	memoryAutoRematerialize bool
+
 	setSideParams SideParamsFn
 	loggerFn      LoggerFn
 
@@ -122,6 +130,20 @@ func (e *ExecImpl) CacheLen() int {
 	e.cacheMu.Lock()
 	defer e.cacheMu.Unlock()
 	return len(e.cache)
+}
+
+// CachedGraphs returns the graphs currently held in the compilation cache.
+// The returned slice is a snapshot; callers must not mutate the graphs.
+func (e *ExecImpl) CachedGraphs() []*GraphImpl {
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+	out := make([]*GraphImpl, 0, len(e.cache))
+	for _, entry := range e.cache {
+		if entry != nil && entry.graph != nil {
+			out = append(out, entry.graph)
+		}
+	}
+	return out
 }
 
 func (e *ExecImpl) WithName(name string) *ExecImpl {
@@ -194,6 +216,25 @@ func (e *ExecImpl) SetMaxCache(maxCacheSize int) *ExecImpl {
 	defer e.cacheMu.Unlock()
 	e.maxCacheSize = maxCacheSize
 	return e
+}
+
+// SetMemoryBudget configures the build-time device memory budget in bytes and
+// whether the framework may insert rematerialization boundaries automatically.
+//
+// A budget of 0 disables planning enforcement entirely, preserving the default
+// compile and execution path byte-for-byte. When a budget is set, every graph is
+// planned before compilation and over-budget graphs fail at build time rather
+// than at execution.
+func (e *ExecImpl) SetMemoryBudget(budgetBytes int64, autoRematerialize bool) *ExecImpl {
+	e.memoryBudgetBytes = budgetBytes
+	e.memoryAutoRematerialize = autoRematerialize && budgetBytes > 0
+	return e
+}
+
+// MemoryBudget returns the configured budget (0 means disabled) and the
+// auto-rematerialization flag.
+func (e *ExecImpl) MemoryBudget() (budgetBytes int64, autoRematerialize bool) {
+	return e.memoryBudgetBytes, e.memoryAutoRematerialize
 }
 
 func (e *ExecImpl) SetSideParamsHook(fn SideParamsFn) *ExecImpl {
@@ -631,6 +672,14 @@ func (e *ExecImpl) buildAndCompileGraph(argsShapes []shapes.Shape, cacheIndex in
 		}
 	}
 
+	// Build-time memory planning: only active when a budget was configured.
+	// With no budget the path below is unchanged.
+	if e.memoryBudgetBytes > 0 {
+		if err := e.enforceMemoryBudget(g, outputs); err != nil {
+			return nil, err
+		}
+	}
+
 	err = g.CompileWithSharding(outputs, outputShardingSpecs)
 	if err != nil {
 		return nil, err
@@ -639,6 +688,28 @@ func (e *ExecImpl) buildAndCompileGraph(argsShapes []shapes.Shape, cacheIndex in
 	copy(entry.argsShapes, argsShapes)
 	entry.numAllOutputs = len(outputs)
 	return entry, nil
+}
+
+// enforceMemoryBudget runs the build-time memory planner against the configured
+// budget, optionally inserting rematerialization boundaries first. The concrete
+// planner is registered through hooks to avoid an import cycle.
+func (e *ExecImpl) enforceMemoryBudget(g *GraphImpl, outputs []*NodeImpl) error {
+	if e.memoryAutoRematerialize {
+		if !MemoryPlannerInstalled() {
+			return errors.Errorf("memory budget enforcement requires the core/graph/memory package to be imported")
+		}
+		if _, _, err := RunMemoryRematerialize(g, e.memoryBudgetBytes, outputs); err != nil {
+			return errors.WithMessagef(err, "memory budget enforcement failed for graph %q", g.Name())
+		}
+		return nil
+	}
+	if !MemoryPlannerInstalled() {
+		return errors.Errorf("memory budget enforcement requires the core/graph/memory package to be imported")
+	}
+	if _, err := RunMemoryPlanner(g, e.memoryBudgetBytes, outputs); err != nil {
+		return errors.WithMessagef(err, "memory budget enforcement failed for graph %q", g.Name())
+	}
+	return nil
 }
 
 func shapesMatch(a, b []shapes.Shape) bool {

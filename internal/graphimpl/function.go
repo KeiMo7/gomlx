@@ -34,6 +34,10 @@ type FunctionImpl struct {
 
 	inputs, outputs []shapes.Shape
 
+	// outputNodes retains the node pointers passed to Return, for build-time
+	// memory planning. It is not used by execution.
+	outputNodes []*NodeImpl
+
 	parameters            []*NodeImpl
 	parametersNames       []string
 	parameterNameToHandle map[string]ParameterHandle
@@ -102,6 +106,11 @@ func (f *FunctionImpl) Parent() *FunctionImpl {
 // IsMain returns whether this is the main function.
 func (f *FunctionImpl) IsMain() bool {
 	return f.name == MainName
+}
+
+// Parameters returns the input parameter nodes registered for this function.
+func (f *FunctionImpl) Parameters() []*NodeImpl {
+	return f.parameters
 }
 
 // IsAncestorOf checks whether f is an ancestor of leafFunc (including f == leafFunc).
@@ -176,7 +185,14 @@ func (f *FunctionImpl) Return(outputs []*NodeImpl, outputShardings []*distribute
 		panic(errors.WithMessagef(err, "Graph failed to set return values"))
 	}
 	f.returned = true
+	f.outputNodes = slices.Clone(outputs)
 	f.outputs = xslices.Map(outputs, func(n *NodeImpl) shapes.Shape { return n.Shape() })
+}
+
+// OutputNodes returns the nodes returned by this function scope, or nil before
+// it has returned.
+func (f *FunctionImpl) OutputNodes() []*NodeImpl {
+	return f.outputNodes
 }
 
 func innermostFunction(inputs []*NodeImpl) (*FunctionImpl, error) {

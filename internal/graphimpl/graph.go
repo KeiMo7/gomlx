@@ -5,6 +5,7 @@ package graphimpl
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -389,6 +390,36 @@ func (g *GraphImpl) LastNode() *NodeImpl {
 // Nodes returns the slice of all nodes in this graph.
 func (g *GraphImpl) Nodes() []*NodeImpl {
 	return g.nodes
+}
+
+// Functions returns all function scopes registered in this graph, in
+// non-deterministic map order; callers that need stability sort the result.
+func (g *GraphImpl) Functions() []*FunctionImpl {
+	fns := make([]*FunctionImpl, 0, len(g.functions))
+	for _, f := range g.functions {
+		fns = append(fns, f)
+	}
+	return fns
+}
+
+// OutputNodes returns the nodes returned from function scope f, if they were
+// retained. Ordinarily only output shapes are stored; memory planning passes
+// the explicit output list instead, but scopes used for whole-graph planning
+// may record their output nodes through SetOutputNodes.
+func (g *GraphImpl) OutputNodes(f *FunctionImpl) []*NodeImpl {
+	if f == nil {
+		return nil
+	}
+	return f.outputNodes
+}
+
+// SetOutputNodes records the returned nodes of f. It is used by memory planning
+// entry points that know the graph outputs explicitly.
+func (g *GraphImpl) SetOutputNodes(f *FunctionImpl, nodes []*NodeImpl) {
+	if f == nil {
+		return
+	}
+	f.outputNodes = slices.Clone(nodes)
 }
 
 // Compile compiles the graph with the given outputs.

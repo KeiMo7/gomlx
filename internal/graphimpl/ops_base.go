@@ -192,10 +192,41 @@ func SplitNode(multiOutputNode *NodeImpl) (splitNodes []*NodeImpl) {
 	return
 }
 
+// ConstantProvenance describes where a constant node's storage originates.
+type ConstantProvenance int
+
+const (
+	// ConstantProvenanceOrdinary is a constant materialized from Go values.
+	ConstantProvenanceOrdinary ConstantProvenance = iota
+
+	// ConstantProvenanceExternalBuffer marks a constant that takes over an
+	// externally provided device buffer (ConstBuffer / ConstDonatedTensor).
+	ConstantProvenanceExternalBuffer
+
+	// ConstantProvenanceSharedValue marks a constant reusing a backend-shared
+	// compute.Value (SharedConstant), which may be shared across graphs.
+	ConstantProvenanceSharedValue
+)
+
 // NodeInputsConstant holds the inputs for a constant node.
 type NodeInputsConstant struct {
 	Shape  shapes.Shape
 	Tensor *tensors.Tensor
+
+	// Provenance classifies the storage origin of the constant.
+	Provenance ConstantProvenance
+
+	// ExternalIdentity identifies the external buffer or shared backend value
+	// backing the constant, so identical storage across nodes (and graphs) can
+	// be de-duplicated into one alias group. It is nil for ordinary constants.
+	ExternalIdentity any
+}
+
+// SetProvenance records the storage origin of a constant node. It is safe to
+// call only while the graph is being built.
+func (ni *NodeInputsConstant) SetProvenance(prov ConstantProvenance, identity any) {
+	ni.Provenance = prov
+	ni.ExternalIdentity = identity
 }
 
 func (ni *NodeInputsConstant) Type() NodeType { return NodeTypeConstant }
@@ -316,14 +347,18 @@ func ConstBuffer(g *GraphImpl, buf compute.Buffer, donate bool) *NodeImpl {
 	if err != nil {
 		panic(errors.WithMessagef(err, "ConstBuffer failed to create a constant in the backend"))
 	}
-	return newConstantNode(g, result, &NodeInputsConstant{Shape: shape})
+	inputs := &NodeInputsConstant{Shape: shape}
+	inputs.SetProvenance(ConstantProvenanceExternalBuffer, bufferIdentity(buf))
+	return newConstantNode(g, result, inputs)
 }
 
 // SharedConstant creates a Constant node reusing a shared backend constant compute.Value.
 func SharedConstant(g *GraphImpl, val compute.Value) *NodeImpl {
 	g.AssertBuilding()
 	shape := mustNoError(g.builder.OpShape(val))
-	return newConstantNode(g, val, &NodeInputsConstant{Shape: shape})
+	inputs := &NodeInputsConstant{Shape: shape}
+	inputs.SetProvenance(ConstantProvenanceSharedValue, bufferIdentity(val))
+	return newConstantNode(g, val, inputs)
 }
 
 // FinalizeConstantValue releases backend resources held by a shared constant compute.Value.

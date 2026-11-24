@@ -294,6 +294,24 @@ func (n *NodeImpl) SetCheckpointed(isCheckpointed, needsRematerialization bool) 
 	n.needsRematerialization = needsRematerialization
 }
 
+// RewireInput replaces the input edge at index idx with newInput. It is used by
+// build-time memory planning to route consumers through an inserted checkpoint
+// barrier node; it does not change shapes, dtypes or the backend value graph
+// already emitted for the operand.
+func (n *NodeImpl) RewireInput(idx int, newInput *NodeImpl) {
+	if idx < 0 || idx >= len(n.inputNodes) {
+		exceptions.Panicf("RewireInput: index %d out of range for node %s with %d inputs", idx, n, len(n.inputNodes))
+	}
+	n.inputNodes[idx] = newInput
+}
+
+// MarkNeedsRematerialization stamps the contagious rematerialization flag on n
+// without wrapping it in a barrier. Existing consumers keep their edges; the
+// flag drives the reverse-mode sweep to reconstruct the value lazily.
+func (n *NodeImpl) MarkNeedsRematerialization() {
+	n.needsRematerialization = true
+}
+
 // CloneWithInputs creates a clone of the node using newInputs instead of the original ones.
 func (n *NodeImpl) CloneWithInputs(newInputs ...*NodeImpl) *NodeImpl {
 	n.AssertValid()
